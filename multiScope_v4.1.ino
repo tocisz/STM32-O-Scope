@@ -17,11 +17,16 @@
 #include <SPI.h>
 #include <Fonts/TomThumb.h> // super small font
 
+#undef AMBIENT
+#ifdef AMBIENT
 //edit Wire.h to set SDA and SCL constants to the desired pins (using PC14 and PC15)
 #include <Wire.h>
 #include <Adafruit_BMP085.h>
+#endif
 
+#ifdef AMBIENT
 Adafruit_BMP085 bmp;
+#endif
 
 
 //#include <stdint.h>
@@ -33,7 +38,7 @@ Adafruit_BMP085 bmp;
 #include "Adafruit_ILI9341_8bit_STM.h" //modified lib for 8-bit parallel displays
 
 #define PORTRAIT 0
-#define LANDSCAPE 1
+#define LANDSCAPE 3
 
 // size on landscape mode
 #define TFT_WIDTH  320
@@ -56,7 +61,7 @@ Pin stm32    |PA0|PA1|PA2|PA3|PA8|
 
 #define TOUCH_SCREEN_AVAILABLE
 
-#if defined TOUCH_SCREEN_AVAILABLE
+#ifdef TOUCH_SCREEN_AVAILABLE
 
 // These are the lcd pins used for touch (you don't need to define them here, but it will make touch setup more clear )
 #define LCD_RD PA0
@@ -65,8 +70,6 @@ Pin stm32    |PA0|PA1|PA2|PA3|PA8|
 #define LCD_CS PA3
 #define LCD_D0 PB8
 #define LCD_D1 PB9
-
-// pin setup for the 4-wire resisitve touch version:
 
 #define YP LCD_RS  // must be an analog pin
 #define XM LCD_CS  // must be an analog pin
@@ -79,7 +82,7 @@ Pin stm32    |PA0|PA1|PA2|PA3|PA8|
 #define YMIN 420
 #define YMAX 3640
 
-#define MINPRESSURE -1 //10
+#define MINPRESSURE 10
 #define MAXPRESSURE 1000
 
 // For better pressure precision, we need to know the resistance
@@ -97,7 +100,14 @@ long lastTapTime;
 boolean gotDoubleTap = false;
 boolean gotTouch = false;
 
-boolean touched_left=false,touched_right=false,touched_top=false,touched_bottom=false,touched_centerX=false,touched_centerY=false;
+short touch_position;
+//|----|----|----|
+//|  5 | 4  | 6  |
+//|----|----|----|
+//|  1 | 0  | 2  |
+//|----|----|----|
+//|  9 | 8  | 10 |
+//|----|----|----|
 
 
 #endif
@@ -215,7 +225,7 @@ boolean serialOutput = false;
 
 // Create USB serial port
 //USBSerial usb;
-#define usb Serial
+#define usb Serial1
 
 // Samples - depends on available RAM 6K is about the limit on an STM32F103C8T6
 // Bear in mind that the ILI9341 display is only able to display 240x320 pixels, at any time but we can output far more to the serial port, we effectively only show a window on our samples on the TFT.
@@ -256,8 +266,8 @@ ADC_SMPR_239_5,             /**< 239.5 ADC cycles
 
 
 //UI variables
-int trunkHeight =0;
-int branch=0;
+short trunkHeight =0;
+short branch=0;
 bool screenChanged = true;
 const int  BOXSIZE=50;
 
@@ -271,11 +281,11 @@ float abs_f(float value){
 //these calculate touch functions are made for LANDSCAPE mode
 uint16_t calculateX(uint16_t x)
 {
-  return 320-(320*(x-XMIN))/(XMAX-XMIN);
+  return TFT_WIDTH*(x-XMIN)/(XMAX-XMIN);
 }
 uint16_t calculateY(uint16_t y)
 {
-  return (240*(y-YMIN))/(YMAX-YMIN);
+  return TFT_HEIGHT-(TFT_HEIGHT*(y-YMIN))/(YMAX-YMIN);
 }
 
 
@@ -331,7 +341,7 @@ void decreaseSamplingRate(){
 
 boolean readTouch(){
   // Retrieve a point
-  TFT.setRotation(LANDSCAPE);
+  TFT.setRotation(LANDSCAPE); // makes no sense, but without this there are jitter pixes on the middle, with it on the right...
   pinMode(LCD_RD,OUTPUT);
   digitalWrite(LCD_RD, HIGH);
   TSPoint p = ts.getPoint();
@@ -342,7 +352,7 @@ boolean readTouch(){
   touchX=calculateX(p.x);
   touchY=calculateY(p.y);
   //this is a patched version, originally it was: if (p.z > MINPRESSURE && p.z < MAXPRESSURE) {
-  if (touchX>20) {
+  if (/*(p.z > 0) &&*/ touchX<TFT_WIDTH-20) {
     gotTouch = true;
     gotDoubleTap=false;
     int deltaTime = millis()-lastTapTime;
@@ -359,72 +369,66 @@ boolean readTouch(){
     TFT.fillCircle(touchX, touchY, 3, ILI9341_NAVY);
 
     /*  Serial.print("touchX = "); Serial.print(touchX);
-    Serial.print("\ttouchY = "); Serial.print(touchY);
-    Serial.print("\tPressure = "); Serial.println(p.z);
-    */
+    Serial.print("\ttouchY = "); Serial.print(touchY); */
+    //      usb.print("\tPressure = "); usb.println(p.z);
   }
-  TFT.setRotation(PORTRAIT);
+  //        TFT.setRotation(PORTRAIT);
   if(gotTouch)  return true;
   else return false;
 }
 
 void Oscilloscope_touchActions(){
   if(gotTouch){
-    if(touched_centerY) {
-      if(touched_left) {
-        decreasetimeFactor();
-      }
-      else if(touched_right) {
-        increasetimeFactor();
-      }
-      else if(touched_centerX) {
-        incEdgeType();
-      }
+    switch (touch_position) {
+      case 0:
+      incEdgeType();
+      break;
+
+      case 1:
+      decreasetimeFactor();
+      break;
+
+      case 2:
+      increasetimeFactor();
+      break;
+
+      case 4:
+      //  if(gotDoubleTap) increaseZoomFactor();
+      increaseSamplingRate();
+      break;
+
+      case 8:
+      //  if(gotDoubleTap) increaseZoomFactor();
+      decreaseSamplingRate();
+      break;
+
+      case 5:
+      increaseZoomFactor();
+      break;
+
+      case 9:
+      decreaseZoomFactor();
+      break;
     }
-    if(touched_centerX) {
-      if(touched_top) {
-        //  if(gotDoubleTap) increaseZoomFactor();
-        increaseSamplingRate();
-
-      }
-      else if(touched_bottom){
-        //  if(gotDoubleTap) increaseZoomFactor();
-        decreaseSamplingRate();
-
-      }
-    }
-
-    //  showLabels();
   }
 }
 
-void touchPos(){
-  // actions on duble tap
-  touched_left=false,touched_right=false,touched_top=false,touched_bottom=false,touched_centerX=false,touched_centerY=false;
+void touchPos() {
+  touch_position = 0;
 
   if(touchX<TFT_WIDTH/3) {
-    Serial.println("touch on  left");
-    touched_left = true;
+    touch_position |= 1;
   }
   else if(touchX>TFT_WIDTH*2/3) {
-    Serial.println("touch on  right");
-    touched_right = true;
+    touch_position |= 2;
   }
-  else touched_centerX = true;
-
-
 
   if(touchY<TFT_HEIGHT/3) {
-    Serial.println("touch on  top");
-    touched_top=true;
+    touch_position |= 4;
   }
   else if(touchY>TFT_HEIGHT*2/3) {
-    Serial.println("touch on  bottom");
-    touched_bottom = true;
+    touch_position |= 8;
   }
-  else touched_centerY = true;
-
-
 }
 
 float sampleADC(int numSamples=3){
@@ -447,8 +451,8 @@ void blockUntilTouch(int timeout = 2500){
     delay(50);
     delta_time=millis()-time_0;
     if(delta_time>=timeout) break;
-  } while (!(touched_centerX and touched_centerY));
-  TFT.setRotation(LANDSCAPE);
+  } while (touch_position != 0);
+  //  TFT.setRotation(LANDSCAPE);
 }
 
 // factors for getting actual voltages from voltage divider iput
@@ -487,7 +491,7 @@ void detectProbeUI(){
   clearTFT();
   TFT.setTextSize(2);                     // Small 26 char / line
   //TFT.setTextColor(CURSOR_COLOUR, BEAM_OFF_COLOUR) ;
-  TFT.setRotation(LANDSCAPE);
+  //        TFT.setRotation(LANDSCAPE);
 
   int YStep = 20;
   int YStart = 20;
@@ -515,7 +519,9 @@ void setup()
   adc_calibrate(ADC2);
   setADCs (); //Setup ADC peripherals for interleaved continuous mode.
 
+  #ifdef AMBIENT
   if (!bmp.begin()) usb.println("bmp sensor init failed, check wiring!");
+  #endif
 
   // The test pulse is a square wave of approx 3.3V (i.e. the STM32 supply voltage) at approx 1 kHz
   // "The Arduino has a fixed PWM frequency of 490Hz" - and it appears that this is also true of the STM32F103 using the current STM32F03 libraries as per
@@ -539,7 +545,7 @@ void setup()
   TFT.begin();
   // initialize the display
   clearTFT();
-  TFT.setRotation(PORTRAIT);
+  //        TFT.setRotation(PORTRAIT);
   myHeight   = TFT.width();
   myWidth  = TFT.height();
   TFT.setTextColor(CURSOR_COLOUR, BEAM_OFF_COLOUR);
@@ -559,11 +565,6 @@ void setup()
   //interrupt for freq counter was here, moved it to the UI of the latter
 }
 
-
-
-void readSerial(){
-
-}
 
 
 void Oscilloscope(){
@@ -614,12 +615,12 @@ void Oscilloscope(){
 void choiceScreen(){
   if(screenChanged){ // caled once, in the beginning
     TFT.fillScreen(ILI9341_BLACK);
-    TFT.setRotation(LANDSCAPE);
+    //  TFT.setRotation(LANDSCAPE);
 
     TFT.fillRect(0, 0, BOXSIZE, BOXSIZE, ILI9341_RED);
     TFT.fillRect(0, BOXSIZE, BOXSIZE, BOXSIZE, ILI9341_GREEN);
     TFT.fillRect(0, BOXSIZE*2, BOXSIZE, BOXSIZE, ILI9341_BLUE);
-    TFT.fillRect(0, BOXSIZE*3, BOXSIZE, BOXSIZE, ILI9341_CYAN);
+    //  TFT.fillRect(0, BOXSIZE*3, BOXSIZE, BOXSIZE, ILI9341_CYAN);
     //  TFT.fillRect(0, BOXSIZE*4, BOXSIZE, BOXSIZE, ILI9341_YELLOW);
     //  TFT.fillRect(0, BOXSIZE*5, BOXSIZE, BOXSIZE, ILI9341_MAGENTA);
     ambientSensor_enabled=false;
@@ -627,19 +628,19 @@ void choiceScreen(){
     screenChanged = false;
   }
 
-  TFT.setRotation(LANDSCAPE);
+  //TFT.setRotation(LANDSCAPE);
   TFT.setTextSize(3);
   TFT.setCursor(BOXSIZE+20, 15);
-  TFT.print("Ambient Data");
-
-  TFT.setCursor(BOXSIZE+20, BOXSIZE+15);
   TFT.print("Oscilloscope");
 
-  TFT.setCursor(BOXSIZE+20, BOXSIZE*2+15);
+  TFT.setCursor(BOXSIZE+20, BOXSIZE+15);
   TFT.print("Freq. Counter");
 
-  TFT.setCursor(BOXSIZE+20, BOXSIZE*3+15);
+  TFT.setCursor(BOXSIZE+20, BOXSIZE*2+15);
   TFT.print("Induct. Meter");
+
+  //  TFT.setCursor(BOXSIZE+20, BOXSIZE*3+15);
+  //  TFT.print("Not implemented");
 
   if(gotTouch){
     if(touchY<BOXSIZE){  //choice 0
@@ -663,13 +664,14 @@ void choiceScreen(){
       TFT.fillScreen(ILI9341_BLACK);
 
     }
+    #ifdef AMBIENT
     if(touchY>BOXSIZE*3&&touchY<BOXSIZE*4){ //choice 3
       screenChanged =true;
       trunkHeight++;
       branch=3;
       TFT.fillScreen(ILI9341_BLACK);
-
     }
+    #endif
 
   }
 
@@ -697,7 +699,7 @@ void freqCounterISR(){ //called when timer compare matches
 }
 
 void freqCounterInit(){
-  attachInterrupt(PIN_CH1_FALL,fallCounterISR,FALLING);
+  attachInterrupt(PIN_CH1_FALL,fallCounterISR,FALLING); // TODO should work with one pin
   attachInterrupt(PIN_CH1_RISE,riseCounterISR,RISING);
   Timer1.setChannel1Mode(TIMER_OUTPUTCOMPARE);
   Timer1.setPeriod(FREQ_COUNT_PERIOD); // in uS
@@ -714,7 +716,7 @@ void freqCounterUI(){
     freqCounterInit();
     toggleTestWaveOn();
     TFT.fillScreen(ILI9341_BLACK);
-    TFT.setRotation(LANDSCAPE);
+    //  TFT.setRotation(LANDSCAPE);
 
     usb.println("freq counter init");
 
@@ -730,7 +732,7 @@ void freqCounterUI(){
   }
 
 
-  TFT.setRotation(LANDSCAPE);
+  //  TFT.setRotation(LANDSCAPE);
   TFT.setCursor(0,30);
   TFT.print(frequency);
   TFT.print(" Hz");
@@ -774,7 +776,7 @@ void inductanceMeterUI(){
     //inductanceMeter_enabled = true;
 
     TFT.fillScreen(ILI9341_BLACK);
-    TFT.setRotation(LANDSCAPE);
+    //  TFT.setRotation(LANDSCAPE);
 
     //TODO  inidcate working range: 80- 30000 uH
 
@@ -789,7 +791,7 @@ void inductanceMeterUI(){
 
   double inductance = getInductance();
 
-  TFT.setRotation(LANDSCAPE);
+  //  TFT.setRotation(LANDSCAPE);
   TFT.setCursor(0,30);
 
   if(inductance<1.e3){
@@ -809,6 +811,7 @@ void inductanceMeterUI(){
 
 
 
+#ifdef AMBIENT
 void ambientSensorUI(){
   if(screenChanged){
     ambientSensor_enabled = true;
@@ -827,6 +830,7 @@ void ambientSensorUI(){
   TFT.print(bmp.readPressure());
   TFT.print(" Pa");
 }
+#endif
 
 void UI(){
   /*
@@ -840,10 +844,7 @@ void UI(){
     ambientSensor_enabled = false;
   }
   else if(trunkHeight==2){
-    if(branch==0){ //power_meter
-      ambientSensorUI();
-    }
-    else if(branch==1){ // oscilloscope
+    if(branch==0){ // oscilloscope
       if(screenChanged){
         scope_enabled = true;
         freqCounterInit();
@@ -856,38 +857,40 @@ void UI(){
       Oscilloscope();
 
     }
-
-    else if(branch==2){
+    else if(branch==1){
       freqCounterUI();
     }
-    else if(branch==3){
+    else if(branch==2){
       inductanceMeterUI();
     }
+    #ifdef AMBIENT
+    else if(branch==0){ //power_meter
+      ambientSensorUI();
+    }
+    #endif
   }
 
 }
 
 void loop()
 {
-  #if defined TOUCH_SCREEN_AVAILABLE
+  #ifdef TOUCH_SCREEN_AVAILABLE
   if (readTouch()) {
     touchPos();
   }
   #endif
-  readSerial();
-
   UI();
 }
 
 void showGraticule()
 {
-  TFT.drawRect(0, 0, myHeight, myWidth, GRATICULE_COLOUR);
+  TFT.drawRect(0, 0, myWidth, myHeight, GRATICULE_COLOUR);
   // Dot grid - ten distinct divisions (9 dots) in both X and Y axis.
   for (uint16_t TicksX = 1; TicksX < 10; TicksX++)
   {
     for (uint16_t TicksY = 1; TicksY < 10; TicksY++)
     {
-      TFT.drawPixel(  TicksX * (myHeight / 10), TicksY * (myWidth / 10), GRATICULE_COLOUR);
+      TFT.drawPixel(TicksY * (myWidth / 10), TicksX * (myHeight / 10), GRATICULE_COLOUR);
 
     }
   }
@@ -895,7 +898,7 @@ void showGraticule()
   int edge_interrupt_falling = 3;   // show more dots for the falling interrupt edge, which may be used for frequency counting
   for (int TicksY = 1; TicksY < 20; TicksY++)
   {
-    TFT.drawPixel(  edge_interrupt_falling * (myHeight / 10), TicksY * (myWidth / 20), GRATICULE_COLOUR);
+    TFT.drawPixel(TicksY * (myWidth / 20),   edge_interrupt_falling * (myHeight / 10), GRATICULE_COLOUR);
 
   }
 
@@ -904,11 +907,11 @@ void showGraticule()
   {
     if (TicksX % (myWidth / 10) > 0 )
     {
-      TFT.drawFastHLine(  (myHeight / 2) - 1, TicksX, 3, GRATICULE_COLOUR);
+      TFT.drawFastVLine(TicksX,   (myHeight / 2) - 1, 3, GRATICULE_COLOUR);
     }
     else
     {
-      TFT.drawFastHLine(  (myHeight / 2) - 3, TicksX, 7, GRATICULE_COLOUR);
+      TFT.drawFastVLine(TicksX,   (myHeight / 2) - 3, 7, GRATICULE_COLOUR);
     }
 
   }
@@ -916,11 +919,11 @@ void showGraticule()
   {
     if (TicksY % (myHeight / 10) > 0 )
     {
-      TFT.drawFastVLine( TicksY,  (myWidth / 2) - 1, 3, GRATICULE_COLOUR);
+      TFT.drawFastHLine((myWidth / 2) - 1,  TicksY,  3, GRATICULE_COLOUR);
     }
     else
     {
-      TFT.drawFastVLine( TicksY,  (myWidth / 2) - 3, 7, GRATICULE_COLOUR);
+      TFT.drawFastHLine((myWidth / 2) - 3,  TicksY,  7, GRATICULE_COLOUR);
     }
   }
 }
@@ -1072,7 +1075,7 @@ void takeSamples ()
     for (signalX=1; signalX < myWidth - 2; signalX++)
     {
       //use saved data to improve speed
-      TFT.drawLine (  dataPlot[signalX-1], signalX, dataPlot[signalX], signalX + 1, beamColour);
+      TFT.drawLine (signalX,   dataPlot[signalX-1], signalX + 1, dataPlot[signalX], beamColour);
     }
   }
 
@@ -1113,7 +1116,7 @@ void takeSamples ()
       // Pick the nearest suitable samples for each of our myWidth screen resolution points
       signalY1 = ((myHeight * dataPoints[(signalX + 1) * ((endSample - startSample) / (myWidth * timeFactor / 100)) + 1]) / ANALOG_MAX_VALUE) * (yZoomFactor / 100) + yPosition;
       dataPlot[signalX] = signalY1 * 99 / 100 + 1;
-      TFT.drawLine (  dataPlot[signalX-1], signalX, dataPlot[signalX], signalX + 1, beamColour);
+      TFT.drawLine (signalX,   dataPlot[signalX-1], signalX + 1, dataPlot[signalX], beamColour);
       signalY = signalY1;
 
     }
@@ -1124,7 +1127,7 @@ void takeSamples ()
 
   void showLabels()
   {
-    TFT.setRotation(LANDSCAPE);
+    //        TFT.setRotation(LANDSCAPE);
     TFT.setTextSize(1);
 
     /*
@@ -1195,7 +1198,7 @@ void takeSamples ()
 
 
 
-    TFT.setRotation(PORTRAIT);
+    //        TFT.setRotation(PORTRAIT);
   }
 
 
@@ -1408,5 +1411,5 @@ void showSplash() {
   TFT.setCursor(0, YStart+=YStep);
   TFT.print("Center ->Trigger Type");
   TFT.setTextSize(2);
-  TFT.setRotation(PORTRAIT);
+  //        TFT.setRotation(PORTRAIT);
 }
