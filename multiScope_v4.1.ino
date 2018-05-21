@@ -1,5 +1,5 @@
 /*.
-* Author: Vítor Barbosa
+* Authors: Vítor Barbosa, Tomasz Cichocki
 * This project was based on STM32-O-Scope (pigScope)
 * It's gonna comprise some useful tools:
 *  Oscilloscope
@@ -170,8 +170,7 @@ volatile long lowTime=0;
 int freqCounter_deltaTime =0;
 float frequency =0;
 // Don't use PC15 and PC14,they didn't work for me
-const int PIN_CH1_FALL = PA15;
-const int PIN_CH1_RISE = PA12;
+const int PIN_CH1_FREQ = PA15;
 
 
 //variables for the inductance meter
@@ -536,8 +535,7 @@ void setup()
 
   // Set up our sensor pin(s)
   pinMode(PIN_CH1_ANALOG, INPUT_ANALOG); // this is the scope wave input
-  pinMode(PIN_CH1_FALL, INPUT); // this is tied to scope wave input too(via 2.2k resistor), but is used to count frequency
-  pinMode(PIN_CH1_RISE, INPUT); // this is tied to scope wave input too(via 2.2k resistor), but is used to count frequency
+  pinMode(PIN_CH1_FREQ, INPUT); // this is tied to scope wave input too(via 2.2k resistor), but is used to count frequency
 
   pinMode(PIN_INDUCT_METER_TRIG, OUTPUT);
   pinMode(PIN_INDUCT_METER_ECHO, INPUT);
@@ -678,9 +676,17 @@ void choiceScreen(){
 }
 
 void fallCounterISR(){
-  lastFallTime = micros();
-  fallCount++;
-  highTime = lastFallTime - lastRiseTime;
+  int val = digitalRead(PIN_CH1_FREQ);
+  unsigned long t = micros();
+  if (val == LOW) {
+    lastFallTime = t;
+    fallCount++;
+    highTime = lastFallTime - lastRiseTime;
+  } else {
+    lastRiseTime = t;
+    riseCount++;
+    lowTime =lastRiseTime-lastFallTime;
+  }
 }
 
 void riseCounterISR(){
@@ -699,8 +705,7 @@ void freqCounterISR(){ //called when timer compare matches
 }
 
 void freqCounterInit(){
-  attachInterrupt(PIN_CH1_FALL,fallCounterISR,FALLING); // TODO should work with one pin
-  attachInterrupt(PIN_CH1_RISE,riseCounterISR,RISING);
+  attachInterrupt(PIN_CH1_FREQ,fallCounterISR,CHANGE);
   Timer1.setChannel1Mode(TIMER_OUTPUTCOMPARE);
   Timer1.setPeriod(FREQ_COUNT_PERIOD); // in uS
   Timer1.setCompare1(1);
@@ -984,7 +989,7 @@ void triggerAlways(){
 void triggerBoth()
 {
   triggerPoints[0] = analogRead(PIN_CH1_ANALOG);
-  while(notTriggered) {
+  while(notTriggered) { // TODO it's not a good idea to block indefinetely
     triggerPoints[1] = analogRead(PIN_CH1_ANALOG);
     if ( ((triggerPoints[1] < triggerValue) && (triggerPoints[0] > triggerValue)) ||
     ((triggerPoints[1] > triggerValue) && (triggerPoints[0] < triggerValue)) ) {
@@ -996,7 +1001,7 @@ void triggerBoth()
 
 void triggerPositive() {
   triggerPoints[0] = analogRead(PIN_CH1_ANALOG);
-  while(notTriggered) {
+  while(notTriggered) { // TODO it's not a good idea to block indefinetely
     triggerPoints[1] = analogRead(PIN_CH1_ANALOG);
     if ((triggerPoints[1] > triggerValue) && (triggerPoints[0] < triggerValue) ) {
       notTriggered = false;
@@ -1007,7 +1012,7 @@ void triggerPositive() {
 
 void triggerNegative() {
   triggerPoints[0] = analogRead(PIN_CH1_ANALOG);
-  while(notTriggered) {
+  while(notTriggered) { // TODO it's not a good idea to block indefinetely
     triggerPoints[1] = analogRead(PIN_CH1_ANALOG);
     if ((triggerPoints[1] < triggerValue) && (triggerPoints[0] > triggerValue) ) {
       notTriggered = false;
@@ -1046,7 +1051,7 @@ void clearTFT()
 void takeSamples ()
 {
   // This loop uses dual interleaved mode to get the best performance out of the ADCs
-  //
+  // XXX Is this why sometimes samples seem swapped on sharp edges?
 
   dma_init(DMA1);
   dma_attach_interrupt(DMA1, DMA_CH1, DMA1_CH1_Event);
@@ -1054,21 +1059,20 @@ void takeSamples ()
   adc_dma_enable(ADC1);
   dma_setup_transfer(DMA1, DMA_CH1, &ADC1->regs->DR, DMA_SIZE_32BITS,
     dataPoints32, DMA_SIZE_32BITS, (DMA_MINC_MODE | DMA_TRNS_CMPLT));// Receive buffer DMA
-    dma_set_num_transfers(DMA1, DMA_CH1, maxSamples / 2);
-    dma1_ch1_Active = 1;
-    //  regs->CR2 |= ADC_CR2_SWSTART; //moved to setADC
-    dma_enable(DMA1, DMA_CH1); // Enable the channel and start the transfer.
-    //adc_calibrate(ADC1);
-    //adc_calibrate(ADC2);
-    samplingTime = micros();
-    while (dma1_ch1_Active);
-    samplingTime = (micros() - samplingTime);
-    kSamples_per_second = float(maxSamples*1000)/samplingTime;
-    timePerSample = float (float(samplingTime) / float(maxSamples));
-    dma_disable(DMA1, DMA_CH1); //End of trasfer, disable DMA and Continuous mode.
-    // regs->CR2 &= ~ADC_CR2_CONT;
-
-  }
+  dma_set_num_transfers(DMA1, DMA_CH1, maxSamples / 2);
+  dma1_ch1_Active = 1;
+  //  regs->CR2 |= ADC_CR2_SWSTART; //moved to setADC
+  dma_enable(DMA1, DMA_CH1); // Enable the channel and start the transfer.
+  //adc_calibrate(ADC1);
+  //adc_calibrate(ADC2);
+  samplingTime = micros();
+  while (dma1_ch1_Active);
+  samplingTime = (micros() - samplingTime);
+  kSamples_per_second = float(maxSamples*1000)/samplingTime;
+  timePerSample = float (float(samplingTime) / float(maxSamples));
+  dma_disable(DMA1, DMA_CH1); //End of trasfer, disable DMA and Continuous mode.
+  // regs->CR2 &= ~ADC_CR2_CONT;
+}
 
   void TFTSamplesClear (uint16_t beamColour)
   {
@@ -1193,10 +1197,6 @@ void takeSamples ()
     TFT.print("Duty:");
     TFT.print(float(highTime)/float(lowTime+highTime));
     TFT.print("   ");
-
-
-
-
 
     //        TFT.setRotation(PORTRAIT);
   }
