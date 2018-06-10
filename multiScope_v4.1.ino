@@ -708,10 +708,9 @@ void freqCounterInit(){
   attachInterrupt(PIN_CH1_FREQ,fallCounterISR,CHANGE);
   Timer1.setChannel1Mode(TIMER_OUTPUTCOMPARE);
   Timer1.setPeriod(FREQ_COUNT_PERIOD); // in uS
-  Timer1.setCompare1(1);
+  Timer1.setCompare1(100);
   Timer1.attachCompare1Interrupt(freqCounterISR);
 }
-
 
 
 
@@ -719,7 +718,7 @@ void freqCounterUI(){
   if(screenChanged){ //use this like a setup()
     //freqCounter_enabled = true;
     freqCounterInit();
-    toggleTestWaveOn();
+    // toggleTestWaveOn();
     TFT.fillScreen(ILI9341_BLACK);
     //  TFT.setRotation(LANDSCAPE);
 
@@ -853,7 +852,7 @@ void UI(){
       if(screenChanged){
         scope_enabled = true;
         freqCounterInit();
-        toggleTestWaveOn();
+        // toggleTestWaveOn();
         showGraticule();
         showLabels();
         screenChanged=false;
@@ -1352,18 +1351,28 @@ void toggleTestWaveOff () {
 }
 
 uint16 timer_set_period(HardwareTimer timer, uint32 microseconds) {
-  if (!microseconds) {
-    timer.setPrescaleFactor(1);
-    timer.setOverflow(1);
-    return timer.getOverflow();
-  }
+  Timer3.pause();
+  pinMode(PB5, PWM);
+  pinMode(PA7, PWM);
+  Timer3.setPrescaleFactor(72); // 1 µs resolution
+  Timer3.setCompare(TIMER_CH2, 20);
+  Timer3.setOverflow(50);
+  Timer3.refresh();
 
-  uint32 cycles = microseconds * (72000000 / 1000000); // 72 cycles per microsecond
+  Timer3.resume(); // let timer 3 run
 
-  uint16 ps = (uint16)((cycles >> 16) + 1);
-  timer.setPrescaleFactor(ps);
-  timer.setOverflow((cycles / ps) - 1 );
-  return timer.getOverflow();
+//  if (!microseconds) {
+//    timer.setPrescaleFactor(1);
+//    timer.setOverflow(1);
+//    return timer.getOverflow();
+//  }
+//
+//  uint32 cycles = microseconds * (72000000 / 1000000); // 72 cycles per microsecond
+//
+//  uint16 ps = (uint16)((cycles >> 16) + 1);
+//  timer.setPrescaleFactor(ps);
+//  timer.setOverflow((cycles / ps) - 1 );
+//  return timer.getOverflow();
 }
 
 /**
